@@ -2212,7 +2212,7 @@ function uploadOne(file) {
   });
 }
 
-const SCREEN_FPS = [2, 5, 10, 15];
+const SCREEN_FPS = [2, 5, 10, 15, 30, 60, 90, 120];
 const SCREEN_HEIGHTS = [720, 1080, 1440];
 const SCREEN_BITRATES = [1000, 2000, 4000, 8000];
 
@@ -2279,7 +2279,7 @@ async function startScreenShare() {
     toast('当前浏览器不支持桌面共享', 'error');
     return;
   }
-  const fps = clampNumber(Number(app.settings.screenFps), 1, 15, 5);
+  const fps = clampNumber(Number(app.settings.screenFps), 1, 120, 5);
   const height = clampNumber(Number(app.settings.screenHeight), 360, 2160, 1080);
   const bitrate = clampNumber(Number(app.settings.screenBitrate), 256, 20000, 4000);
   closeScreenOptions();
@@ -2402,7 +2402,7 @@ function beginScreenUpload() {
       const started = performance.now();
       await sendScreenFrame();
       if (!s.active) return;
-      s.timer = setTimeout(loop, Math.max(60, Math.round(1000 / fps - (performance.now() - started))));
+      s.timer = setTimeout(loop, Math.max(8, Math.round(1000 / fps - (performance.now() - started))));
     };
     loop();
   };
@@ -2454,13 +2454,16 @@ async function sendScreenFrame() {
       if (res.status === 429) s.quality = Math.max(0.28, s.quality - 0.1);
     }
     s.bytes += blob.size;
+    s.sentFrames = (s.sentFrames || 0) + 1;
     const now = performance.now();
     if (now - s.windowAt >= 1000) {
       const kbps = Math.round((s.bytes * 8) / Math.max(1, now - s.windowAt));
+      const actualFps = Math.round(((s.sentFrames || 1) * 1000) / Math.max(1, now - s.windowAt));
       s.windowAt = now;
       s.bytes = 0;
+      s.sentFrames = 0;
       if (s.active && s.owner) {
-        $('#screen-status').textContent = `${w}×${h} · ${fps} fps · 约 ${kbps} kbps`;
+        $('#screen-status').textContent = `${w}×${h} · 目标 ${fps} fps · 实际 ${actualFps} fps · 约 ${kbps} kbps`;
       }
     }
   } catch { /* next frame retries */ } finally {
@@ -2499,6 +2502,9 @@ function resetScreen() {
     inFlight: false,
     bytes: 0,
     windowAt: 0,
+    sentFrames: 0,
+    recvFrames: 0,
+    recvAt: 0,
   };
   const panel = $('#screen-panel');
   if (panel) panel.classList.add('hidden');
@@ -2520,6 +2526,8 @@ function startScreenViewer(info) {
   app.screen.owner = false;
   app.screen.info = info;
   app.screen.seq = info.seq || 0;
+  app.screen.recvAt = performance.now();
+  app.screen.recvFrames = 0;
   app.screen.video = $('#screen-video');
   $('#screen-title').textContent = `${info.peer.name} 的桌面`;
   $('#screen-meta').textContent = `${info.width}×${info.height} · ${info.fps} fps · ≤ ${(info.bitrate / 1000).toFixed(1)} Mbps`;
@@ -2538,8 +2546,8 @@ function startScreenPolling() {
   stopScreenPolling();
   s.abort = new AbortController();
   const info = s.info || {};
-  const fps = Math.max(1, Math.min(15, Number(info.fps || 5)));
-  const delay = Math.max(100, Math.round(1000 / fps));
+  const fps = Math.max(1, Math.min(120, Number(info.fps || 5)));
+  const delay = Math.max(8, Math.round(1000 / fps));
   const tick = async () => {
     if (!s.active || s.owner) return;
     if ($('#screen-panel').classList.contains('hidden')) return;
@@ -2559,7 +2567,14 @@ function startScreenPolling() {
           img.src = next;
           img.hidden = false;
           if (old) setTimeout(() => URL.revokeObjectURL(old), 1200);
-          $('#screen-status').textContent = `已接收 · ${(info.width || 0)}×${(info.height || 0)} · ${fps} fps`;
+          s.recvFrames = (s.recvFrames || 0) + 1;
+          const now = performance.now();
+          if (now - (s.recvAt || 0) >= 1000) {
+            const actualFps = Math.round(((s.recvFrames || 1) * 1000) / Math.max(1, now - (s.recvAt || now)));
+            s.recvAt = now;
+            s.recvFrames = 0;
+            $('#screen-status').textContent = `已接收 · ${(info.width || 0)}×${(info.height || 0)} · 目标 ${fps} fps · 实际 ${actualFps} fps`;
+          }
         }
       } else if (res.status === 404 || res.status === 403) {
         resetScreen();

@@ -15,8 +15,8 @@ import (
 
 const (
 	maxScreenFrame = 2 << 20
-	maxScreenRate  = 8 << 20 // bytes per second per sharer
-	maxScreenFPS   = 15
+	maxScreenRate  = 16 << 20 // bytes per second per sharer
+	maxScreenFPS   = 120
 )
 
 type screenState struct {
