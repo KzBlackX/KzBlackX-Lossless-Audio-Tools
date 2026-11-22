@@ -1239,3 +1239,23 @@ h1, h2, h3, h4, p { margin: 0; }
   .screen-panel { padding: 8px; }
   .screen-box { width: 100vw; height: 80vh; border-radius: 10px; }
 }
+
+/* Screen options: keep the layout airy and legible. */
+#screen-modal .modal-card { width: min(590px, 100%); }
+#screen-modal .modal-head { padding: 22px 26px 16px; }
+#screen-modal .modal-head h3 { font-size: 20px; }
+#screen-modal .modal-head p { font-size: 12px; margin-top: 5px; }
+#screen-modal .modal-body { padding: 18px 26px 22px; display: grid; gap: 16px; }
+#screen-modal .field.compact { grid-template-columns: 88px 1fr; gap: 16px; }
+#screen-modal .field > .label { font-size: 13px; color: var(--text); letter-spacing: 0.02em; }
+#screen-modal .chip-group { gap: 8px; }
+#screen-modal .chip { padding: 9px 14px; font-size: 13px; border-radius: 8px; }
+#screen-modal .hint { font-size: 12.5px; line-height: 1.75; color: var(--muted); margin: 0; }
+#screen-modal .modal-foot { padding: 16px 26px; gap: 10px; }
+#screen-modal .modal-foot .btn { min-width: 96px; }
+@media (max-width: 560px) {
+  #screen-modal .field.compact { grid-template-columns: 1fr; gap: 8px; }
+  #screen-modal .modal-head { padding: 18px 18px 14px; }
+  #screen-modal .modal-body { padding: 14px 18px 18px; }
+  #screen-modal .modal-foot { padding: 14px 18px; }
+}
