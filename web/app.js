@@ -39,7 +39,7 @@ const app = {
     ec: store.get('ec', true),
     ns: store.get('ns', true),
     agc: store.get('agc', true),
-    screenFps: store.get('screenFps', 5),
+    screenFps: store.get('screenFps', 30),
     screenHeight: store.get('screenHeight', 1080),
     screenBitrate: store.get('screenBitrate', 4000),
   },
@@ -2214,7 +2214,7 @@ function uploadOne(file) {
   });
 }
 
-const SCREEN_FPS = [2, 5, 10, 15, 30, 60, 90, 120];
+const SCREEN_FPS = [30, 60, 90, 120];
 const SCREEN_HEIGHTS = [720, 1080, 1440];
 const SCREEN_BITRATES = [1000, 2000, 4000, 8000];
 
@@ -2237,6 +2237,11 @@ function updateScreenButton() {
 }
 
 function renderScreenOptions() {
+  // Drop old 2/5/10/15 selections from localStorage.
+  if (!SCREEN_FPS.includes(Number(app.settings.screenFps))) {
+    app.settings.screenFps = 30;
+    store.set('screenFps', 30);
+  }
   const groups = [
     ['#sf-fps', SCREEN_FPS, Number(app.settings.screenFps), (v) => `${v} fps`, 'screenFps'],
     ['#sf-height', SCREEN_HEIGHTS, Number(app.settings.screenHeight), (v) => `${v}p`, 'screenHeight'],
@@ -2286,7 +2291,7 @@ async function startScreenShare() {
     toast('当前浏览器不支持桌面共享', 'error');
     return;
   }
-  const fps = clampNumber(Number(app.settings.screenFps), 1, 120, 5);
+  const fps = clampNumber(Number(app.settings.screenFps), 30, 120, 30);
   const height = clampNumber(Number(app.settings.screenHeight), 360, 2160, 1080);
   const bitrate = clampNumber(Number(app.settings.screenBitrate), 256, 20000, 4000);
   closeScreenOptions();
