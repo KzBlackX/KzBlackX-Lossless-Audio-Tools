@@ -1,0 +1,30 @@
+[Unit]
+Description=KzBlackX Lossless Audio Tools voice server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kzblackx
+Group=kzblackx
+WorkingDirectory=/var/lib/kzblackx
+EnvironmentFile=/etc/kzblackx/audio.env
+ExecStart=/usr/local/bin/kzblackx-audio
+Restart=always
+RestartSec=2
+LimitNOFILE=65535
+
+# Bind :443 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kzblackx
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

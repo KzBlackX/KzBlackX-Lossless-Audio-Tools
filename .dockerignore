@@ -1,0 +1,7 @@
+.git
+dist
+lan-cert
+test/node_modules
+docs
+*.log
+data

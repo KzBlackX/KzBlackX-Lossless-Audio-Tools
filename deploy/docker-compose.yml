@@ -1,0 +1,15 @@
+services:
+  kzblackx-audio:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: kzblackx-audio:local
+    container_name: kzblackx-audio
+    restart: unless-stopped
+    network_mode: host          # required: WebRTC needs the real UDP port
+    env_file: ./audio.env
+    volumes:
+      - ./data:/var/lib/kzblackx  # ACME certificate cache + temporary room files
+    # Binding :443 inside host networking needs the capability below.
+    cap_add:
+      - NET_BIND_SERVICE

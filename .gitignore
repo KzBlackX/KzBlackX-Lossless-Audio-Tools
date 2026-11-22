@@ -1,0 +1,6 @@
+dist/
+node_modules/
+.acme-cache/
+lan-cert/
+*.log
+data/
