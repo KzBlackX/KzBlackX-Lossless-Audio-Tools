@@ -350,9 +350,11 @@ func (h *Hub) leaveRoom(p *Peer, reason string, notify bool) *Room {
 		p.source = nil
 	}
 	p.pcMu.Unlock()
+	p.closeVideoSource()
 
 	for _, o := range others {
 		o.removeSink(p.id)
+		o.removeVideoSink(p.id)
 	}
 	h.broadcast(room, "", msgPeerLeft{T: "peer-left", ID: p.id})
 	if flacStopped {

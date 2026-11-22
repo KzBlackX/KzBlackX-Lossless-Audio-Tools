@@ -371,7 +371,7 @@
         <div class="field compact"><span class="label">帧数</span><div class="chip-group" id="sf-fps"></div></div>
         <div class="field compact"><span class="label">分辨率</span><div class="chip-group" id="sf-height"></div></div>
         <div class="field compact"><span class="label">码率</span><div class="chip-group" id="sf-bitrate"></div></div>
-        <p class="hint">分辨率是画面高度，宽度按屏幕比例缩放；码率是目标上限，服务器只转发不转码。手机可以观看，但共享需要桌面版 Chrome / Edge。90/120 fps 是目标值，实际帧率受抓屏、JPEG 编码和网络限制；真正的高帧率视频需要 WebRTC 方案。</p>
+        <p class="hint">分辨率是画面高度，宽度按屏幕比例缩放；码率是目标上限。视频通过 WebRTC 发送，服务端只转发 RTP，不转码。手机可以观看，但共享需要桌面版 Chrome / Edge。90/120 fps 需要显示器和浏览器都支持，实际帧率会显示在画面下方。</p>
       </div>
       <div class="modal-foot"><button class="btn ghost" id="screen-modal-cancel">取消</button><button class="btn primary" id="screen-start">开始共享</button></div>
     </div>

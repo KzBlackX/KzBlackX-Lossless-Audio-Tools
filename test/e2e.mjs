@@ -98,32 +98,43 @@ try {
   assert((await fileRes.text()) === 'KzBlackX file transfer\n', 'file bytes changed in transit');
   console.log('file transfer ok');
 
-  // Screen sharing relay: start a metadata-only share, upload one JPEG frame,
-  // and verify the viewer receives it. The real getDisplayMedia path is tested
-  // separately in a desktop browser.
-  await a.evaluate(() => window.qy.app.ws.send(JSON.stringify({
-    t: 'screen-start', width: 960, height: 540, fps: 5, screenBitrate: 2000,
-  })));
-  await b.waitForFunction(() => window.qy.app.screen.active && !window.qy.app.screen.owner, null, { timeout: 15000 });
-  await a.evaluate(async () => {
+  // Screen sharing: use a canvas capture stream as a deterministic screen
+  // track, start the share through the normal UI, and verify the second client
+  // receives a decoded WebRTC video track.
+  await a.evaluate(() => {
     const canvas = document.createElement('canvas');
     canvas.width = 960; canvas.height = 540;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#0b3d2e'; ctx.fillRect(0, 0, 960, 540);
-    ctx.fillStyle = '#6ee7b7'; ctx.font = 'bold 44px sans-serif';
-    ctx.fillText('screen relay ok', 80, 270);
-    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.8));
-    const res = await fetch('/api/screen/frame?room=' + encodeURIComponent(window.qy.room), {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + window.qy.app.token, 'Content-Type': 'image/jpeg' },
-      body: blob,
+    const draw = () => {
+      ctx.fillStyle = '#0b3d2e'; ctx.fillRect(0, 0, 960, 540);
+      ctx.fillStyle = '#6ee7b7'; ctx.font = 'bold 48px sans-serif';
+      ctx.fillText('KzBlackX WebRTC screen', 70, 250);
+      ctx.fillStyle = '#9fb4c7'; ctx.font = '22px monospace';
+      ctx.fillText('canvas capture -> VP8 -> Pion -> viewer', 72, 300);
+    };
+    draw();
+    setInterval(draw, 100);
+    const stream = canvas.captureStream(10);
+    Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', {
+      configurable: true,
+      value: async () => stream,
     });
-    if (!res.ok) throw new Error('screen upload HTTP ' + res.status());
   });
-  await b.waitForFunction(() => document.getElementById('screen-img').naturalWidth > 0, null, { timeout: 15000 });
-  await a.evaluate(() => window.qy.app.ws.send(JSON.stringify({ t: 'screen-stop' })));
+  await a.click('#screen-btn');
+  await a.waitForTimeout(250);
+  await a.click('#screen-start');
+  await a.waitForFunction(() => window.qy.app.screen.owner && window.qy.app.screen.info, null, { timeout: 25000 });
+  await b.waitForFunction(() => window.qy.app.screen.active && !window.qy.app.screen.owner
+    && document.getElementById('screen-video').videoWidth > 0, null, { timeout: 25000 });
+  const screenMeta = await b.evaluate(() => ({
+    width: document.getElementById('screen-video').videoWidth,
+    height: document.getElementById('screen-video').videoHeight,
+    info: window.qy.app.screen.info,
+  }));
+  assert(screenMeta.width > 0 && screenMeta.height > 0, 'screen video track did not decode');
+  await a.click('#screen-stop');
   await b.waitForFunction(() => !window.qy.app.screen.active, null, { timeout: 10000 });
-  console.log('screen relay ok');
+  console.log('screen WebRTC ok:', screenMeta.width + 'x' + screenMeta.height);
 
   await b.evaluate(() => window.qy.setMuted(true));
   await a.waitForTimeout(2500);

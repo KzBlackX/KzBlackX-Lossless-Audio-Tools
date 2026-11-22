@@ -34,11 +34,14 @@ type Peer struct {
 
 	pcMu         sync.Mutex
 	pc           *webrtc.PeerConnection
-	sinks        map[string]*sink // publisher peer id -> forwarding track
+	sinks        map[string]*sink // publisher peer id -> audio forwarding track
+	videoSinks   map[string]*sink // publisher peer id -> screen forwarding track
 	negotiating  bool             // a local offer is waiting for an answer
 	pendingOffer bool             // media changed while an offer was in flight
 
-	source *source // our published audio, stable across PC rebuilds
+	source      *source // our published audio, stable across PC rebuilds
+	videoMu     sync.Mutex
+	videoSource *source // our published screen video, rebuilt per screen session
 
 	closeOnce sync.Once
 	done      chan struct{}
@@ -62,15 +65,16 @@ type Peer struct {
 
 func newPeer(h *Hub, id, name, ip string, bitrate int) *Peer {
 	p := &Peer{
-		hub:      h,
-		log:      h.log.With("peer", id),
-		id:       id,
-		name:     name,
-		baseName: name,
-		ip:       ip,
-		joinedAt: time.Now(),
-		sinks:    make(map[string]*sink),
-		done:     make(chan struct{}),
+		hub:        h,
+		log:        h.log.With("peer", id),
+		id:         id,
+		name:       name,
+		baseName:   name,
+		ip:         ip,
+		joinedAt:   time.Now(),
+		sinks:      make(map[string]*sink),
+		videoSinks: make(map[string]*sink),
+		done:       make(chan struct{}),
 	}
 	p.bitrate.Store(int32(bitrate))
 	return p
@@ -128,6 +132,7 @@ func (p *Peer) shutdown() {
 	if p.source != nil {
 		p.source.close()
 	}
+	p.closeVideoSource()
 }
 
 // teardownPCLocked closes the peer connection and unsubscribes from every
@@ -144,6 +149,13 @@ func (p *Peer) teardownPCLocked() {
 			snk.src.removeSink(snk)
 		}
 		delete(p.sinks, id)
+	}
+	for id, snk := range p.videoSinks {
+		snk.stop()
+		if snk.src != nil {
+			snk.src.removeSink(snk)
+		}
+		delete(p.videoSinks, id)
 	}
 	p.negotiating = false
 	p.pendingOffer = false

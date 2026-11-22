@@ -62,6 +62,23 @@ export function preferOpus(sdp, kbps) {
   return lines.join(sep);
 }
 
+function preferredVideoCodecs() {
+  try {
+    const caps = RTCRtpSender.getCapabilities('video');
+    if (!caps) return null;
+    const wanted = ['video/vp8', 'video/h264'];
+    const out = [];
+    for (const mime of wanted) {
+      for (const c of caps.codecs) {
+        if (c.mimeType.toLowerCase() === mime) out.push(c);
+      }
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 function opusOnly() {
   try {
     const caps = RTCRtpSender.getCapabilities('audio');
@@ -74,9 +91,10 @@ function opusOnly() {
 }
 
 export class VoiceLink {
-  constructor({ onSignal, onTrack, onState, onLog }) {
+  constructor({ onSignal, onTrack, onScreenTrack, onState, onLog }) {
     this.onSignal = onSignal;
     this.onTrack = onTrack;
+    this.onScreenTrack = onScreenTrack || (() => {});
     this.onState = onState;
     this.onLog = onLog || (() => {});
     this.pc = null;
@@ -89,7 +107,10 @@ export class VoiceLink {
     this.prev = new Map();
     this.lastStatsAt = 0;
     this.tracks = new Map(); // peerId -> MediaStreamTrack
+    this.videoTracks = new Map(); // peerId -> screen MediaStreamTrack
     this.midMap = new Map(); // transceiver mid -> peerId
+    this.screenTrack = null;
+    this.screenOpts = null;
   }
 
   get localTrack() {
@@ -108,11 +129,25 @@ export class VoiceLink {
     await this.build(true);
   }
 
+  async startScreen(track, opts) {
+    this.screenTrack = track;
+    this.screenOpts = opts || {};
+    if (opts && opts.kbps) this.kbps = opts.kbps;
+    await this.build(true);
+  }
+
+  async stopScreen() {
+    this.screenTrack = null;
+    this.screenOpts = null;
+    await this.build(true);
+  }
+
   async build(fresh) {
     this.teardownPC();
     this.closed = false;
     this.remoteReady = false;
     this.pendingRemoteCandidates = [];
+    this.videoTracks.clear();
 
     const pc = new RTCPeerConnection({
       iceServers: [],
@@ -135,6 +170,14 @@ export class VoiceLink {
     };
     pc.ontrack = (ev) => {
       const track = ev.track;
+      if (track.kind === 'video') {
+        const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([track]);
+        const rawId = stream.id || track.id.replace(/^video-/, '');
+        const peerId = rawId.startsWith('screen-') ? rawId.slice(7) : rawId;
+        this.videoTracks.set(peerId, track);
+        this.onScreenTrack(peerId, stream, track);
+        return;
+      }
       if (track.kind !== 'audio') return;
       const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([track]);
       const peerId = stream.id || track.id.replace(/^audio-/, '');
@@ -162,10 +205,39 @@ export class VoiceLink {
       try { transceiver.setCodecPreferences(codecs); } catch (e) { this.onLog('codec prefs: ' + e.message); }
     }
 
+    let videoTransceiver = null;
+    if (this.screenTrack) {
+      const screenStream = new MediaStream([this.screenTrack]);
+      videoTransceiver = pc.addTransceiver(this.screenTrack, {
+        direction: 'sendonly',
+        streams: [screenStream],
+      });
+      const videoCodecs = preferredVideoCodecs();
+      if (videoCodecs && videoTransceiver.setCodecPreferences) {
+        try { videoTransceiver.setCodecPreferences(videoCodecs); } catch (e) { this.onLog('video codec prefs: ' + e.message); }
+      }
+    }
+
     const offer = await pc.createOffer();
     const sdp = preferOpus(offer.sdp, this.kbps);
     await pc.setLocalDescription({ type: 'offer', sdp });
+    if (videoTransceiver) await this.applyScreenSenderParams(videoTransceiver.sender);
     this.onSignal({ t: 'offer', sdp, fresh });
+  }
+
+  async applyScreenSenderParams(sender) {
+    if (!sender || !this.screenOpts) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      const enc = params.encodings[0];
+      if (this.screenOpts.maxBitrate) enc.maxBitrate = this.screenOpts.maxBitrate;
+      if (this.screenOpts.maxFramerate) enc.maxFramerate = this.screenOpts.maxFramerate;
+      if (this.screenOpts.scaleResolutionDownBy) enc.scaleResolutionDownBy = this.screenOpts.scaleResolutionDownBy;
+      await sender.setParameters(params);
+    } catch (e) {
+      this.onLog('screen sender params: ' + e.message);
+    }
   }
 
   handleOffer(sdp) {

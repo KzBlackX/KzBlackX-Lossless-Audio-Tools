@@ -1003,6 +1003,7 @@ async function setupRoomMedia() {
   app.link = new VoiceLink({
     onSignal: (m) => send(m),
     onTrack: (peerId, stream) => attachAudio(peerId, stream),
+    onScreenTrack: (peerId, stream) => onScreenTrack(peerId, stream),
     onState: (s) => setConnState(s),
     onLog: (line) => console.debug('[rtc]', line),
   });
@@ -1047,6 +1048,7 @@ async function leaveRoom({ quiet = false } = {}) {
 }
 
 function logout() {
+  resetScreen();
   app.manualClose = true;
   clearTimeout(app.reconnectTimer);
   app.reconnectTimer = null;
@@ -2273,8 +2275,13 @@ function closeScreenOptions() {
   $('#screen-modal').classList.add('hidden');
 }
 
+function clampNumber(v, lo, hi, def) {
+  if (!Number.isFinite(v)) return def;
+  return Math.max(lo, Math.min(hi, Math.round(v)));
+}
+
 async function startScreenShare() {
-  if (!app.joined) return;
+  if (!app.joined || !app.link) return;
   if (!screenSupported()) {
     toast('当前浏览器不支持桌面共享', 'error');
     return;
@@ -2311,29 +2318,40 @@ async function startScreenShare() {
   app.screen.owner = true;
   app.screen.pending = true;
   app.screen.stream = stream;
+  app.screen.track = track;
   app.screen.video = video;
-  app.screen.quality = 0.65;
   app.screen.info = null;
   showScreenPanel();
-  $('#screen-video').hidden = false;
-  $('#screen-img').hidden = true;
+  video.hidden = false;
   $('#screen-stop').hidden = false;
   $('#screen-title').textContent = '我的桌面共享';
-  $('#screen-meta').textContent = `${fps} fps · 目标 ${(bitrate / 1000).toFixed(1)} Mbps`;
-  $('#screen-status').textContent = '正在启动共享…';
+  $('#screen-meta').textContent = `目标 ${fps} fps · ≤ ${(bitrate / 1000).toFixed(1)} Mbps`;
+  $('#screen-status').textContent = '正在建立 WebRTC 视频连接…';
   updateScreenButton();
-  try { await video.play(); } catch { /* autoplay muted */ }
+  try { await video.play(); } catch { /* muted autoplay */ }
+  startScreenFpsMeter();
   const settings = track.getSettings ? track.getSettings() : {};
   const width = Math.round(settings.width || video.videoWidth || 1280);
   const realHeight = Math.round(settings.height || video.videoHeight || height);
-  track.addEventListener('ended', () => stopScreenShare(true));
+  // Register the share before adding the video transceiver; the server uses this
+  // metadata to allow the RTP source and to show the panel to the room.
   send({ t: 'screen-start', width, height: realHeight, fps, screenBitrate: bitrate });
+  track.addEventListener('ended', () => stopScreenShare(true));
   app.screen.pendingTimer = setTimeout(() => {
     if (app.screen.pending) {
       stopScreenShare(true);
       toast('桌面共享启动超时', 'error');
     }
-  }, 5000);
+  }, 8000);
+  try {
+    await app.link.startScreen(track, {
+      maxBitrate: bitrate * 1000,
+      maxFramerate: fps,
+    });
+  } catch (err) {
+    stopScreenShare(true);
+    toast('桌面视频启动失败：' + (err.message || err), 'error');
+  }
 }
 
 function onScreenStarted(info) {
@@ -2345,17 +2363,18 @@ function onScreenStarted(info) {
     app.screen.info = info;
     showScreenPanel();
     updateScreenButton();
-    beginScreenUpload();
+    $('#screen-status').textContent = `WebRTC 视频 · ${info.width}×${info.height} · 目标 ${info.fps} fps`;
     return;
   }
-  if (app.screen.owner) stopScreenShare(false);
+  if (app.screen.owner) return; // server would reject a second sharer
   startScreenViewer(info);
 }
 
 function onScreenStopped(id) {
   if (!app.screen.active) return;
-  if (app.screen.owner && app.me?.id === id) {
-    resetScreen();
+  const wasOwner = app.screen.owner;
+  if (wasOwner && app.me?.id === id) {
+    stopScreenShare(false);
     return;
   }
   if (app.screen.info?.peer?.id === id) {
@@ -2365,146 +2384,112 @@ function onScreenStopped(id) {
   }
 }
 
+function onScreenTrack(peerId, stream) {
+  // A video track can arrive just before the screen-started JSON. Keep it so
+  // startScreenViewer can attach it immediately.
+  app.screen.remoteStream = stream;
+  app.screen.remotePeer = peerId;
+  if (!app.screen.active || app.screen.owner) return;
+  if (app.screen.info && app.screen.info.peer.id !== peerId) return;
+  attachScreenStream(stream);
+}
+
+function attachScreenStream(stream) {
+  const video = $('#screen-video');
+  if (!video || !stream) return;
+  app.screen.stream = stream;
+  app.screen.video = video;
+  video.srcObject = stream;
+  video.hidden = false;
+  $('#screen-img').hidden = true;
+  showScreenPanel();
+  startScreenFpsMeter();
+  const info = app.screen.info;
+  if (info) {
+    $('#screen-status').textContent = `WebRTC 视频 · ${info.width}×${info.height} · 目标 ${info.fps} fps`;
+  }
+}
+
 function showScreenPanel() {
   if (!app.screen.active) return;
   $('#screen-panel').classList.remove('hidden');
-  if (app.screen.owner) {
-    $('#screen-video').hidden = false;
-    $('#screen-img').hidden = true;
-    $('#screen-stop').hidden = false;
-  } else {
-    $('#screen-video').hidden = true;
-    $('#screen-stop').hidden = true;
-    if (!$('#screen-img').src) $('#screen-img').hidden = true;
-    if (!app.screen.timer) startScreenPolling();
-  }
+  const video = $('#screen-video');
+  video.hidden = false;
+  $('#screen-img').hidden = true;
+  $('#screen-stop').hidden = !app.screen.owner;
+  if (app.screen.stream) video.play().catch(() => {});
 }
 
 function hideScreenPanel() {
   $('#screen-panel').classList.add('hidden');
-  if (!app.screen.owner) stopScreenPolling();
-}
-
-function clampNumber(v, lo, hi, def) {
-  if (!Number.isFinite(v)) return def;
-  return Math.max(lo, Math.min(hi, Math.round(v)));
-}
-
-function beginScreenUpload() {
-  const s = app.screen;
-  if (!s.active || !s.owner || !s.video) return;
-  clearTimeout(s.timer);
-  const fps = Math.max(1, Number(s.info?.fps || app.settings.screenFps || 5));
-  const start = () => {
-    if (!s.active || !s.owner) return;
-    const loop = async () => {
-      if (!s.active || !s.owner) return;
-      const started = performance.now();
-      await sendScreenFrame();
-      if (!s.active) return;
-      s.timer = setTimeout(loop, Math.max(8, Math.round(1000 / fps - (performance.now() - started))));
-    };
-    loop();
-  };
-  if (s.video.readyState >= 2) start();
-  else s.video.addEventListener('loadedmetadata', start, { once: true });
-}
-
-async function sendScreenFrame() {
-  const s = app.screen;
-  if (!s.active || !s.owner || s.inFlight || !s.video || !s.video.videoWidth) return;
-  const info = s.info || {};
-  const targetH = Math.max(240, Number(info.height || app.settings.screenHeight || 1080));
-  const scale = Math.min(1, targetH / s.video.videoHeight);
-  let w = Math.max(2, Math.round(s.video.videoWidth * scale));
-  let h = Math.max(2, Math.round(s.video.videoHeight * scale));
-  if (w > 2560) {
-    h = Math.round(h * 2560 / w);
-    w = 2560;
+  const video = $('#screen-video');
+  if (video && !app.screen.owner) {
+    // Stop decoding while the viewer has the panel closed; reattaching the
+    // stream on reopen starts again.
+    video.pause();
   }
-  if (w < 160 || h < 90) return;
-  if (!s.canvas) s.canvas = document.createElement('canvas');
-  const canvas = s.canvas;
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-  const ctx = canvas.getContext('2d', { alpha: false });
-  ctx.drawImage(s.video, 0, 0, w, h);
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', s.quality));
-  if (!blob) return;
-  const fps = Math.max(1, Number(info.fps || app.settings.screenFps || 5));
-  const targetBytes = Math.max(1500, (Number(info.bitrate || app.settings.screenBitrate) * 1000 / 8) / fps);
-  if (blob.size > targetBytes * 1.25) s.quality = Math.max(0.28, s.quality - 0.08);
-  else if (blob.size < targetBytes * 0.7) s.quality = Math.min(0.86, s.quality + 0.02);
-  if (blob.size > 1.9 * 1024 * 1024) return;
+}
 
-  s.inFlight = true;
-  try {
-    const res = await fetch(`/api/screen/frame?room=${encodeURIComponent(app.room)}`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + app.token, 'Content-Type': 'image/jpeg' },
-      body: blob,
-    });
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 403 || res.status === 404 || res.status === 409) {
-        stopScreenShare(false);
-        return;
-      }
-      if (res.status === 429) s.quality = Math.max(0.28, s.quality - 0.1);
+function startScreenFpsMeter() {
+  const video = $('#screen-video');
+  if (!video || !('requestVideoFrameCallback' in video)) return;
+  if (app.screen.fpsMeterRunning) return;
+  app.screen.fpsMeterRunning = true;
+  app.screen.frameCount = 0;
+  app.screen.fpsAt = performance.now();
+  const tick = () => {
+    if (!app.screen.active || !app.screen.stream) {
+      app.screen.fpsMeterRunning = false;
+      return;
     }
-    s.bytes += blob.size;
-    s.sentFrames = (s.sentFrames || 0) + 1;
+    app.screen.frameCount++;
     const now = performance.now();
-    if (now - s.windowAt >= 1000) {
-      const kbps = Math.round((s.bytes * 8) / Math.max(1, now - s.windowAt));
-      const actualFps = Math.round(((s.sentFrames || 1) * 1000) / Math.max(1, now - s.windowAt));
-      s.windowAt = now;
-      s.bytes = 0;
-      s.sentFrames = 0;
-      if (s.active && s.owner) {
-        $('#screen-status').textContent = `${w}×${h} · 目标 ${fps} fps · 实际 ${actualFps} fps · 约 ${kbps} kbps`;
+    if (now - app.screen.fpsAt >= 1000) {
+      const actual = Math.round((app.screen.frameCount * 1000) / Math.max(1, now - app.screen.fpsAt));
+      app.screen.frameCount = 0;
+      app.screen.fpsAt = now;
+      const info = app.screen.info;
+      if (info) {
+        $('#screen-status').textContent = `WebRTC 视频 · ${info.width}×${info.height} · 目标 ${info.fps} fps · 实际 ${actual} fps`;
       }
     }
-  } catch { /* next frame retries */ } finally {
-    s.inFlight = false;
-  }
+    video.requestVideoFrameCallback(tick);
+  };
+  video.requestVideoFrameCallback(tick);
 }
 
-function stopScreenShare(notify) {
-  if (app.screen.owner && app.screen.active && notify !== false) send({ t: 'screen-stop' });
+async function stopScreenShare(notify) {
+  const wasOwner = app.screen.owner && app.screen.active;
+  if (wasOwner && notify !== false) send({ t: 'screen-stop' });
+  const link = app.link;
   resetScreen();
+  if (wasOwner && link) {
+    try { await link.stopScreen(); } catch { /* audio rebuild best-effort */ }
+  }
 }
 
 function resetScreen() {
   const s = app.screen;
-  clearTimeout(s.timer);
   clearTimeout(s.pendingTimer);
-  if (s.abort) { try { s.abort.abort(); } catch { /* noop */ } }
   if (s.stream) s.stream.getTracks().forEach((t) => t.stop());
   if (s.video) {
     try { s.video.pause(); } catch { /* noop */ }
     s.video.srcObject = null;
   }
-  if (s.objectURL) URL.revokeObjectURL(s.objectURL);
   app.screen = {
     active: false,
     owner: false,
     pending: false,
     info: null,
     stream: null,
+    track: null,
     video: s.video || null,
-    timer: null,
-    seq: 0,
-    abort: null,
-    objectURL: null,
-    quality: 0.65,
-    inFlight: false,
-    bytes: 0,
-    windowAt: 0,
-    sentFrames: 0,
-    recvFrames: 0,
-    recvAt: 0,
+    pendingTimer: null,
+    fpsMeterRunning: false,
+    frameCount: 0,
+    fpsAt: 0,
+    remoteStream: null,
+    remotePeer: '',
   };
   const panel = $('#screen-panel');
   if (panel) panel.classList.add('hidden');
@@ -2519,82 +2504,24 @@ function resetScreen() {
 
 function startScreenViewer(info) {
   if (!app.joined || !info || !info.peer || info.peer.id === app.me?.id) return;
-  const hadOwner = app.screen.owner;
-  if (hadOwner) stopScreenShare(false);
-  else resetScreen();
+  const pendingStream = app.screen.remoteStream;
+  const pendingPeer = app.screen.remotePeer;
+  resetScreen();
   app.screen.active = true;
   app.screen.owner = false;
   app.screen.info = info;
-  app.screen.seq = info.seq || 0;
-  app.screen.recvAt = performance.now();
-  app.screen.recvFrames = 0;
   app.screen.video = $('#screen-video');
   $('#screen-title').textContent = `${info.peer.name} 的桌面`;
-  $('#screen-meta').textContent = `${info.width}×${info.height} · ${info.fps} fps · ≤ ${(info.bitrate / 1000).toFixed(1)} Mbps`;
-  $('#screen-status').textContent = '等待画面…';
-  $('#screen-video').hidden = true;
-  $('#screen-img').hidden = true;
+  $('#screen-meta').textContent = `${info.width}×${info.height} · 目标 ${info.fps} fps · ≤ ${(info.bitrate / 1000).toFixed(1)} Mbps`;
+  $('#screen-status').textContent = '等待 WebRTC 视频…';
+  $('#screen-video').hidden = false;
   $('#screen-stop').hidden = true;
   showScreenPanel();
   updateScreenButton();
-  startScreenPolling();
-}
-
-function startScreenPolling() {
-  const s = app.screen;
-  if (!s.active || s.owner) return;
-  stopScreenPolling();
-  s.abort = new AbortController();
-  const info = s.info || {};
-  const fps = Math.max(1, Math.min(120, Number(info.fps || 5)));
-  const delay = Math.max(8, Math.round(1000 / fps));
-  const tick = async () => {
-    if (!s.active || s.owner) return;
-    if ($('#screen-panel').classList.contains('hidden')) return;
-    const token = app.fileToken;
-    const url = `/api/screen/frame?room=${encodeURIComponent(app.room)}&token=${encodeURIComponent(token)}&seq=${s.seq}`;
-    try {
-      const res = await fetch(url, { cache: 'no-store', signal: s.abort?.signal });
-      if (res.status === 200) {
-        const seq = Number(res.headers.get('X-Screen-Seq') || 0);
-        const blob = await res.blob();
-        if (blob.size) {
-          const next = URL.createObjectURL(blob);
-          const old = s.objectURL;
-          s.objectURL = next;
-          s.seq = seq;
-          const img = $('#screen-img');
-          img.src = next;
-          img.hidden = false;
-          if (old) setTimeout(() => URL.revokeObjectURL(old), 1200);
-          s.recvFrames = (s.recvFrames || 0) + 1;
-          const now = performance.now();
-          if (now - (s.recvAt || 0) >= 1000) {
-            const actualFps = Math.round(((s.recvFrames || 1) * 1000) / Math.max(1, now - (s.recvAt || now)));
-            s.recvAt = now;
-            s.recvFrames = 0;
-            $('#screen-status').textContent = `已接收 · ${(info.width || 0)}×${(info.height || 0)} · 目标 ${fps} fps · 实际 ${actualFps} fps`;
-          }
-        }
-      } else if (res.status === 404 || res.status === 403) {
-        resetScreen();
-        return;
-      }
-    } catch (err) {
-      if (err.name === 'AbortError') return;
-    }
-    if (s.active && !s.owner) s.timer = setTimeout(tick, delay);
-  };
-  s.timer = setTimeout(tick, 60);
-}
-
-function stopScreenPolling() {
-  const s = app.screen;
-  clearTimeout(s.timer);
-  s.timer = null;
-  if (s.abort) {
-    try { s.abort.abort(); } catch { /* noop */ }
-    s.abort = null;
+  if (pendingStream && (!pendingPeer || pendingPeer === info.peer.id)) {
+    app.screen.remoteStream = pendingStream;
+    app.screen.remotePeer = pendingPeer;
+    attachScreenStream(pendingStream);
   }
 }
 

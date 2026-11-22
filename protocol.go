@@ -115,8 +115,6 @@ type screenInfo struct {
 	Height  int      `json:"height"`
 	FPS     int      `json:"fps"`
 	Bitrate int      `json:"bitrate"`
-	Seq     uint64   `json:"seq"`
-	Updated int64    `json:"updated"`
 }
 
 type msgScreenStarted struct {

@@ -28,7 +28,6 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/api/info", a.handleInfo)
 	mux.HandleFunc("/api/files/upload", a.handleFileUpload)
 	mux.HandleFunc("/api/files/", a.handleFileDownload)
-	mux.HandleFunc("/api/screen/frame", a.handleScreenFrame)
 	mux.Handle("/", a.static())
 	return a.securityHeaders(mux)
 }

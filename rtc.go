@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
@@ -15,8 +16,11 @@ import (
 // renegotiation and a client-side PeerConnection rebuild, so subscribers keep
 // their forwarding tracks.
 type source struct {
-	id  string
-	hub *Hub
+	id       string
+	kind     string // "audio" or "video"
+	codec    webrtc.RTPCodecCapability
+	keyFrame func()
+	hub      *Hub
 
 	mu     sync.RWMutex
 	sinks  map[*sink]struct{}
@@ -27,7 +31,11 @@ type source struct {
 }
 
 func newSource(id string) *source {
-	return &source{id: id, sinks: make(map[*sink]struct{})}
+	return &source{id: id, kind: "audio", codec: opusCapability(), sinks: make(map[*sink]struct{})}
+}
+
+func newVideoSource(id string, codec webrtc.RTPCodecCapability) *source {
+	return &source{id: id, kind: "video", codec: codec, sinks: make(map[*sink]struct{})}
 }
 
 func (s *source) addSink(snk *sink) bool {
@@ -161,6 +169,10 @@ func (p *Peer) handleOffer(sdp string, fresh bool) {
 		p.pcMu.Unlock()
 		return
 	}
+	// A fresh client offer rebuilds the media connection (screen start/stop
+	// or a quality change). Drop the previous screen source; a new video
+	// track will create a new one if the offer carries one.
+	p.closeVideoSource()
 	p.teardownPCLocked()
 
 	pc, err := p.hub.newPeerConnection(p)
@@ -250,17 +262,27 @@ func (p *Peer) afterAnswer() {
 	p.negotiating = false
 	added := 0
 	for _, other := range p.hub.peersExcept(p) {
-		if other.closed.Load() || other.source == nil {
+		if other.closed.Load() {
 			continue
 		}
-		if _, ok := p.sinks[other.id]; ok {
-			continue
+		if other.source != nil {
+			if _, ok := p.sinks[other.id]; !ok {
+				if err := p.addSinkLocked(other.source); err != nil {
+					p.log.Debug("subscribe audio", "publisher", other.id, "err", err)
+				} else {
+					added++
+				}
+			}
 		}
-		if err := p.addSinkLocked(other.source); err != nil {
-			p.log.Debug("subscribe", "publisher", other.id, "err", err)
-			continue
+		if src := other.currentVideoSource(); src != nil {
+			if _, ok := p.videoSinks[other.id]; !ok {
+				if err := p.addSinkLocked(src); err != nil {
+					p.log.Debug("subscribe video", "publisher", other.id, "err", err)
+				} else {
+					added++
+				}
+			}
 		}
-		added++
 	}
 	offer := ""
 	if added > 0 {
@@ -276,7 +298,20 @@ func (p *Peer) addSinkLocked(src *source) error {
 	if p.pc == nil {
 		return errors.New("no peer connection")
 	}
-	track, err := webrtc.NewTrackLocalStaticRTP(opusCapability(), "audio-"+src.id, src.id)
+	m := p.sinks
+	if src.kind == "video" {
+		m = p.videoSinks
+	}
+	if _, ok := m[src.id]; ok {
+		return errors.New("already subscribed")
+	}
+	streamID := src.id
+	trackID := "audio-" + src.id
+	if src.kind == "video" {
+		streamID = "screen-" + src.id
+		trackID = "video-" + src.id
+	}
+	track, err := webrtc.NewTrackLocalStaticRTP(src.codec, trackID, streamID)
 	if err != nil {
 		return err
 	}
@@ -289,9 +324,12 @@ func (p *Peer) addSinkLocked(src *source) error {
 		_ = p.pc.RemoveTrack(sender)
 		return errors.New("source closed")
 	}
-	p.sinks[src.id] = snk
+	m[src.id] = snk
 	go snk.run()
 	go drainRTCP(sender)
+	if src.kind == "video" && src.keyFrame != nil {
+		go src.keyFrame()
+	}
 	return nil
 }
 
@@ -305,13 +343,17 @@ func (p *Peer) subscribe(src *source) {
 		p.pcMu.Unlock()
 		return
 	}
-	if _, ok := p.sinks[src.id]; ok {
+	m := p.sinks
+	if src.kind == "video" {
+		m = p.videoSinks
+	}
+	if _, ok := m[src.id]; ok {
 		p.pcMu.Unlock()
 		return
 	}
 	if err := p.addSinkLocked(src); err != nil {
 		p.pcMu.Unlock()
-		p.log.Debug("subscribe", "publisher", src.id, "err", err)
+		p.log.Debug("subscribe", "publisher", src.id, "kind", src.kind, "err", err)
 		return
 	}
 	offer := p.startOfferLocked()
@@ -321,21 +363,25 @@ func (p *Peer) subscribe(src *source) {
 	}
 }
 
-func (p *Peer) removeSink(publisherID string) {
+func (p *Peer) removeSinkMap(kind, publisherID string) {
 	p.pcMu.Lock()
-	snk, ok := p.sinks[publisherID]
+	m := p.sinks
+	if kind == "video" {
+		m = p.videoSinks
+	}
+	snk, ok := m[publisherID]
 	if !ok {
 		p.pcMu.Unlock()
 		return
 	}
-	delete(p.sinks, publisherID)
+	delete(m, publisherID)
 	snk.stop()
 	if snk.src != nil {
 		snk.src.removeSink(snk)
 	}
 	if p.pc != nil {
 		if err := p.pc.RemoveTrack(snk.sender); err != nil {
-			p.log.Debug("remove track", "err", err)
+			p.log.Debug("remove track", "kind", kind, "err", err)
 		}
 	}
 	offer := p.startOfferLocked()
@@ -343,6 +389,14 @@ func (p *Peer) removeSink(publisherID string) {
 	if offer != "" {
 		p.send(msgOffer{T: "offer", SDP: offer})
 	}
+}
+
+func (p *Peer) removeSink(publisherID string) {
+	p.removeSinkMap("audio", publisherID)
+}
+
+func (p *Peer) removeVideoSink(publisherID string) {
+	p.removeSinkMap("video", publisherID)
 }
 
 // startOfferLocked must be called with pcMu held.
@@ -370,6 +424,10 @@ func (p *Peer) startOfferLocked() string {
 // readTrack pumps a publisher's RTP into its source. Header extensions are
 // stripped because extension ids are negotiated per subscriber and may differ.
 func (p *Peer) readTrack(track *webrtc.TrackRemote) {
+	if track.Kind() == webrtc.RTPCodecTypeVideo {
+		p.readVideoTrack(track)
+		return
+	}
 	if p.source == nil {
 		return
 	}
@@ -398,6 +456,102 @@ func (p *Peer) readTrack(track *webrtc.TrackRemote) {
 		pkt.Header.Extensions = nil
 		pkt.Header.CSRC = nil
 		p.source.push(pkt)
+	}
+}
+
+// readVideoTrack forwards one publisher's screen video RTP. It is created only
+// while the peer is the active screen sharer in its room.
+func (p *Peer) readVideoTrack(track *webrtc.TrackRemote) {
+	codec := track.Codec()
+	if codec.MimeType == "" {
+		return
+	}
+	p.hub.mu.RLock()
+	allowed := p.room != nil && p.room.Screen != nil && p.room.Screen.PeerID == p.id && !p.closed.Load()
+	p.hub.mu.RUnlock()
+	if !allowed {
+		for {
+			if _, _, err := track.ReadRTP(); err != nil {
+				return
+			}
+		}
+	}
+	src := newVideoSource(p.id, webrtc.RTPCodecCapability{
+		MimeType:    codec.MimeType,
+		ClockRate:   codec.ClockRate,
+		Channels:    codec.Channels,
+		SDPFmtpLine: codec.SDPFmtpLine,
+	})
+	ssrc := uint32(track.SSRC())
+	src.keyFrame = func() {
+		p.pcMu.Lock()
+		pc := p.pc
+		p.pcMu.Unlock()
+		if pc == nil {
+			return
+		}
+		_ = pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: ssrc}})
+	}
+	p.setVideoSource(src)
+	go p.hub.videoWentLive(p, src)
+	p.log.Debug("publishing screen video", "codec", codec.MimeType, "pt", codec.PayloadType, "clock", codec.ClockRate)
+	first := true
+	for {
+		pkt, _, err := track.ReadRTP()
+		if err != nil {
+			if !p.closed.Load() {
+				p.log.Debug("screen stream ended", "err", err)
+			}
+			return
+		}
+		if p.closed.Load() {
+			return
+		}
+		if first {
+			first = false
+			p.log.Debug("first screen rtp packet", "seq", pkt.SequenceNumber, "bytes", len(pkt.Payload))
+		}
+		pkt.Header.Extension = false
+		pkt.Header.ExtensionProfile = 0
+		pkt.Header.Extensions = nil
+		pkt.Header.CSRC = nil
+		src.push(pkt)
+	}
+}
+
+func (p *Peer) setVideoSource(src *source) {
+	p.videoMu.Lock()
+	old := p.videoSource
+	p.videoSource = src
+	p.videoMu.Unlock()
+	if old != nil && old != src {
+		old.close()
+	}
+}
+
+func (p *Peer) currentVideoSource() *source {
+	p.videoMu.Lock()
+	defer p.videoMu.Unlock()
+	return p.videoSource
+}
+
+func (p *Peer) closeVideoSource() {
+	p.videoMu.Lock()
+	src := p.videoSource
+	p.videoSource = nil
+	p.videoMu.Unlock()
+	if src != nil {
+		src.close()
+	}
+}
+
+// videoWentLive makes every other participant subscribe to a new screen stream.
+func (h *Hub) videoWentLive(p *Peer, src *source) {
+	if src == nil {
+		return
+	}
+	for _, other := range h.peersExcept(p) {
+		other.subscribe(src)
 	}
 }
 
