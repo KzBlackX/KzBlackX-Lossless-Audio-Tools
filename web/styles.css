@@ -1259,3 +1259,89 @@ h1, h2, h3, h4, p { margin: 0; }
   #screen-modal .modal-body { padding: 14px 18px 18px; }
   #screen-modal .modal-foot { padding: 14px 18px; }
 }
+
+/* ---------------- Readability pass ---------------- */
+.field > .label { font-size: 13.5px; }
+.auth-card { width: min(500px, 100%); padding: 30px; }
+.auth-card h2 { font-size: 28px; }
+.auth-sub { font-size: 14px; line-height: 1.7; }
+.auth-form { margin-top: 22px; gap: 18px; }
+.auth-form input { font-size: 15px; padding: 13px 15px; }
+.auth-form .btn { font-size: 15.5px; padding: 14px 18px; }
+.auth-foot { font-size: 12px; gap: 8px 18px; margin-top: 22px; }
+.auth-head .server-name { font-size: 13px; }
+.pill { font-size: 12px; padding: 6px 11px; }
+.form-note { font-size: 13px; line-height: 1.6; }
+.brand-mini b { font-size: 14px; }
+.brand-mini span { font-size: 8.5px; letter-spacing: .18em; }
+.modal-head h3 { font-size: 20px; }
+.modal-head p { font-size: 12px; }
+.hint { font-size: 12.5px; }
+.modal-body .form-note { font-size: 13px; }
+.btn { font-size: 14.5px; }
+.btn.tiny { font-size: 12.5px; }
+input, select { font-size: 14.5px; }
+
+@media (max-width: 560px) {
+  .auth-card { padding: 22px; width: 100%; }
+  .auth-card h2 { font-size: 25px; }
+  .auth-sub { font-size: 13px; }
+  .auth-form { gap: 15px; }
+}
+
+@media (min-width: 901px) {
+  .topbar { height: 58px; }
+  .room-body { grid-template-columns: 252px minmax(0, 1fr) 348px; gap: 14px; }
+  .room-title b { font-size: 17px; }
+  .room-title span:not(.conn-dot) { font-size: 12px; }
+  .quality-badge { font-size: 11.5px; padding: 6px 10px; }
+  .icon-btn { width: 40px; height: 40px; }
+  .icon-btn svg { width: 20px; height: 20px; }
+  .channels { padding: 16px 14px; }
+  .chat { padding: 16px 16px 14px; }
+  .panel-head { font-size: 12px; padding-bottom: 12px; }
+  .channel { font-size: 15px; padding: 11px 10px; gap: 10px; }
+  .channel svg { width: 17px; height: 17px; }
+  .channel .n { font-size: 11.5px; }
+  .channels-note { font-size: 11.5px; line-height: 1.65; }
+  .server-mini strong { font-size: 15px; }
+  .server-mini span { font-size: 11px; }
+  .stage-head h2 { font-size: 28px; }
+  .stage-head p { font-size: 13.5px; }
+  .stage-live { font-size: 11px; }
+  .peer-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .peer-grid[data-count="1"] { grid-template-columns: minmax(0, 410px); }
+  .peer-grid[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 340px)); }
+  .peer-grid[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 300px)); }
+  .peer-grid[data-count="4"] { grid-template-columns: repeat(2, minmax(0, 330px)); }
+  .tile-name { font-size: 15px; }
+  .tile-meta { font-size: 11px; }
+  .badge-you { font-size: 10px; }
+  .chat-empty { font-size: 13px; }
+  .msg-head b { font-size: 13px; }
+  .msg-head time { font-size: 10.5px; }
+  .msg p { font-size: 14px; line-height: 1.6; }
+  .msg.system p { font-size: 12px; }
+  .chat-form input { font-size: 14px; padding: 12px 14px; }
+  .chat-form button { width: 42px; }
+  .file-card .fm b { font-size: 13px; }
+  .file-card .fm small { font-size: 10.5px; }
+  .self-mini b { font-size: 14px; }
+  .self-mini span { font-size: 11px; }
+  .round { width: 54px; height: 54px; }
+  .round svg { width: 22px; height: 22px; }
+  .round.small { width: 46px; height: 46px; }
+  .ptt-btn { font-size: 13px; padding: 10px 16px 10px 10px; }
+  .ptt-btn kbd { font-size: 11px; }
+  .netstat span { font-size: 10px; }
+  .netstat b { font-size: 14px; }
+  .controls { padding: 12px 16px; gap: 14px; }
+  .leave { font-size: 13px; padding: 11px 14px; }
+}
+
+@media (min-width: 901px) and (max-width: 1080px) {
+  .room-body { grid-template-columns: 220px minmax(0, 1fr) 300px; }
+  .round { width: 50px; height: 50px; }
+  .round.small { width: 42px; height: 42px; }
+}
+.auth-form .btn.primary { justify-content: center; }
