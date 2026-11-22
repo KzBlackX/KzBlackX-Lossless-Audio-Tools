@@ -39,6 +39,7 @@ const app = {
     ec: store.get('ec', true),
     ns: store.get('ns', true),
     agc: store.get('agc', true),
+    sounds: store.get('sounds', true),
     screenFps: store.get('screenFps', 30),
     screenHeight: store.get('screenHeight', 1080),
     screenBitrate: store.get('screenBitrate', 4000),
@@ -479,6 +480,7 @@ function syncHardwareToggles() {
   $('#ec-toggle').checked = !!app.settings.ec;
   $('#ns-toggle').checked = !!app.settings.ns;
   $('#agc-toggle').checked = !!app.settings.agc;
+  $('#sounds-toggle').checked = !!app.settings.sounds;
   renderPttKeys();
 }
 
@@ -944,6 +946,7 @@ async function handleRoomJoined(msg) {
   $('#roomview').classList.remove('hidden');
   app.pendingRoomName = '';
   app.pendingRoomLocked = false;
+  playCue('enter');
   $('#room-confirm').classList.add('hidden');
   $('#room-empty').classList.add('hidden');
   $('#channels').classList.remove('open');
@@ -1048,6 +1051,7 @@ async function leaveRoom({ quiet = false } = {}) {
 }
 
 function logout() {
+  playCue('leave');
   resetScreen();
   app.manualClose = true;
   clearTimeout(app.reconnectTimer);
@@ -1220,12 +1224,14 @@ function onServerMessage(msg) {
       if (!app.joined || !msg.peer || msg.peer.id === app.me?.id) return;
       upsertPeer(msg.peer);
       addSystem(`${msg.peer.name} 加入了房间`);
+      playCue('enter');
       renderParticipants();
       break;
     case 'peer-left': {
       const peer = app.peers.get(msg.id);
       if (peer) {
         addSystem(`${peer.name} 离开了房间`);
+        playCue('leave');
         removePeer(msg.id);
       }
       break;
@@ -1489,6 +1495,31 @@ function getAudioCtx() {
   }
   if (app.audioCtx.state === 'suspended') app.audioCtx.resume().catch(() => {});
   return app.audioCtx;
+}
+
+// Short synthesized room cues: no audio files to download. The cue respects
+// the "提示音" setting and is skipped when the user is deafened.
+function playCue(kind) {
+  if (!app.settings.sounds || app.deafened) return;
+  try {
+    const ctx = getAudioCtx();
+    const now = ctx.currentTime + 0.01;
+    const notes = kind === 'leave' ? [659.25, 440] : [523.25, 659.25];
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + i * 0.11);
+      const t = now + i * 0.11;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.075, t + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.18);
+    });
+  } catch { /* audio context may be unavailable */ }
 }
 
 function attachMeter(id, stream) {
@@ -2568,10 +2599,11 @@ async function applySettings() {
   app.settings.ec = $('#ec-toggle').checked;
   app.settings.ns = $('#ns-toggle').checked;
   app.settings.agc = $('#agc-toggle').checked;
+  app.settings.sounds = $('#sounds-toggle').checked;
   app.settings.pttKey = $('#ptt-key').dataset.value || 'v';
   app.settings.inputId = $('#input-device').dataset.value || '';
   app.settings.outputId = $('#output-device').dataset.value || '';
-  for (const k of ['ec', 'ns', 'agc', 'pttKey', 'inputId', 'outputId']) store.set(k, app.settings[k]);
+  for (const k of ['ec', 'ns', 'agc', 'sounds', 'pttKey', 'inputId', 'outputId']) store.set(k, app.settings[k]);
   syncHardwareToggles();
   updateQualityBadge();
   renderPtt();
@@ -2820,6 +2852,7 @@ function syncTestHook() {
     logout,
     sendChat: (text) => send({ t: 'chat', text }),
     setMuted: (v) => { app.muted = !!v; applyMicGate(); sendState(); },
+    playCue: (kind = 'enter') => playCue(kind),
     togglePtt: () => { app.settings.pttEnabled = !app.settings.pttEnabled; renderPtt(); },
   };
 }

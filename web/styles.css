@@ -1345,3 +1345,5 @@ input, select { font-size: 14.5px; }
   .round.small { width: 42px; height: 42px; }
 }
 .auth-form .btn.primary { justify-content: center; }
+
+#settings-modal .modal-card { max-height: 94dvh; }
